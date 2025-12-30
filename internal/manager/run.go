@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/avast/retry-go/v4"
@@ -47,7 +48,24 @@ import (
 	"github.com/kong/kubernetes-ingress-controller/v3/internal/versions"
 	managercfg "github.com/kong/kubernetes-ingress-controller/v3/pkg/manager/config"
 	"github.com/kong/kubernetes-ingress-controller/v3/pkg/metadata"
+	"k8s.io/apimachinery/pkg/runtime"
 )
+
+// populateCacheFromSnapshot copies objects from a snapshot into the live cache.
+func populateCacheFromSnapshot(target *store.CacheStores, snap store.CacheStores) error {
+	for _, s := range snap.ListAllStores() {
+		for _, item := range s.List() {
+			obj, ok := item.(runtime.Object)
+			if !ok {
+				continue
+			}
+			if err := target.Add(obj.DeepCopyObject()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 // -----------------------------------------------------------------------------
 // Controller Manager - Setup & Run
@@ -217,6 +235,37 @@ func New(
 
 	referenceIndexers := ctrlref.NewCacheIndexers(setupLog.WithName("reference-indexers"))
 	cache := store.NewCacheStores()
+	// Optionally seed the internal cache from an S3 snapshot if configured.
+	if bucket := os.Getenv("KIC_CACHE_S3_BUCKET"); bucket != "" {
+		key := os.Getenv("KIC_CACHE_S3_KEY")
+		region := os.Getenv("KIC_AWS_REGION")
+		p, err := store.NewS3CachePersister(bucket, key, region)
+		if err != nil {
+			setupLog.Error(err, "failed to initialize S3 cache persister; continuing without cache seed")
+		} else {
+			setupLog.Info("Attempting to restore cache snapshot from S3", "bucket", bucket, "key", key)
+			if snap, err := p.LoadSnapshot(ctx); err != nil {
+				setupLog.Error(err, "failed to load cache snapshot from s3; continuing without seed")
+			} else {
+				// populate the live cache with the snapshot before controllers start
+				if err := populateCacheFromSnapshot(&cache, snap); err != nil {
+					setupLog.Error(err, "failed to populate cache from snapshot; continuing")
+				} else {
+					setupLog.Info("Cache restored from S3 snapshot")
+				}
+			}
+			// start periodic saves
+			intervalSec := 300
+			if is := os.Getenv("KIC_CACHE_S3_SAVE_INTERVAL"); is != "" {
+				if v, perr := strconv.Atoi(is); perr == nil && v > 0 {
+					intervalSec = v
+				}
+			}
+			p.StartPeriodicSave(ctx, time.Duration(intervalSec)*time.Second, cache)
+			setupLog.Info("Started periodic cache snapshot uploads to S3", "intervalSec", intervalSec)
+		}
+	}
+
 	storer := store.New(cache, c.IngressClassName, logger)
 
 	configTranslator, err := translator.NewTranslator(logger, storer, c.KongWorkspace, kongSemVersion, translatorFeatureFlags, NewSchemaServiceGetter(clientsManager),
@@ -237,7 +286,31 @@ func New(
 
 	updateStrategyResolver := sendconfig.NewDefaultUpdateStrategyResolver(kongConfig, logger)
 	configurationChangeDetector := sendconfig.NewKongGatewayConfigurationChangeDetector(logger)
-	kongConfigFetcher := configfetcher.NewDefaultKongLastGoodConfigFetcher(translatorFeatureFlags.FillIDs, c.KongWorkspace)
+	var kongConfigFetcher configfetcher.LastValidConfigFetcher
+	kongConfigFetcher = configfetcher.NewDefaultKongLastGoodConfigFetcher(translatorFeatureFlags.FillIDs, c.KongWorkspace)
+
+	// Optional: if environment variables for S3 persistence are set, wrap the
+	// default fetcher with an S3-backed fetcher so the last-valid config is
+	// persisted to S3 and can be restored after restarts.
+	if bucket := os.Getenv("KIC_LAST_VALID_S3_BUCKET"); bucket != "" {
+		key := os.Getenv("KIC_LAST_VALID_S3_KEY")
+		region := os.Getenv("KIC_AWS_REGION")
+		s3f, err := configfetcher.NewS3BackedFetcher(kongConfigFetcher, bucket, key, region)
+		if err != nil {
+			setupLog.Error(err, "failed to initialize S3-backed last-valid-config fetcher; continuing with in-memory fetcher")
+		} else {
+			// start periodic upload loop
+			intervalSec := 60
+			if is := os.Getenv("KIC_LAST_VALID_S3_UPLOAD_INTERVAL"); is != "" {
+				if v, perr := strconv.Atoi(is); perr == nil && v > 0 {
+					intervalSec = v
+				}
+			}
+			s3f.StartPeriodicUpload(ctx, time.Duration(intervalSec)*time.Second)
+			kongConfigFetcher = s3f
+			setupLog.Info("Enabled S3-backed last-valid-config fetcher", "bucket", bucket, "key", key, "uploadIntervalSec", intervalSec)
+		}
+	}
 	fallbackConfigGenerator := fallback.NewGenerator(fallback.NewDefaultCacheGraphProvider(), logger)
 	metricsRecorder := metrics.NewGlobalCtrlRuntimeMetricsRecorder(instanceID)
 

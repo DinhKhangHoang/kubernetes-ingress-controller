@@ -474,6 +474,19 @@ func (c *KongClient) Update(ctx context.Context) error {
 		}
 	}
 
+	// If the controller cache is not available (for example kube-apiserver is
+	// unreachable during startup), attempt to restore the last valid Kong
+	// configuration to gateways so we don't overwrite a working proxy with an
+	// empty config.
+	if !c.cache.Available() {
+		fmt.Errorf("Cache not available on startup; attempting to restore last-valid KongState to gateways")
+		if err := c.RestoreLastValidKongState(ctx); err != nil {
+			fmt.Errorf("failed to restore last-valid KongState to gateways at startup")
+		} else {
+			fmt.Errorf("Restored last-valid KongState to gateways from fetcher")
+		}
+	}
+
 	// If FallbackConfiguration is enabled, we take a snapshot of the cache so that we operate on a consistent
 	// set of resources in case of failures being returned from Kong. As we're going to generate a fallback config
 	// based on the cache contents, we need to ensure it is not modified during the process.
@@ -881,6 +894,27 @@ func (c *KongClient) SetKonnectKongStateUpdater(u KonnectKongStateUpdater) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	c.konnectKongStateUpdater = u
+}
+
+// RestoreLastValidKongState attempts to push the last valid KongState stored
+// in the configured `LastValidConfigFetcher` to the gateways. It is intended
+// for use during controller restart when the Kubernetes cache is unavailable
+// and pushing an empty configuration would be harmful.
+func (c *KongClient) RestoreLastValidKongState(ctx context.Context) error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	state, found := c.kongConfigFetcher.LastValidConfig()
+	if !found || state == nil {
+		return fmt.Errorf("no last valid kong state available to restore")
+	}
+
+	const isFallback = true
+	if _, err := c.sendOutToGatewayClients(ctx, state, c.kongConfig, isFallback); err != nil {
+		return fmt.Errorf("failed to restore last valid KongState to gateways: %w", err)
+	}
+	c.logger.Info("Successfully restored last-valid KongState to gateways")
+	return nil
 }
 
 // -----------------------------------------------------------------------------

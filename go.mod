@@ -20,6 +20,7 @@ require (
 	github.com/Kong/sdk-konnect-go v0.6.0
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/avast/retry-go/v4 v4.6.1
+	github.com/aws/aws-sdk-go v1.55.8
 	github.com/blang/semver/v4 v4.0.0
 	github.com/cnf/structhash v0.0.0-20250313080605-df4c6cc74a9a
 	github.com/dominikbraun/graph v0.23.0
@@ -77,6 +78,7 @@ require (
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/google/cel-go v0.23.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.24.0 // indirect
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/moby/go-archive v0.1.0 // indirect
 	github.com/moby/sys/atomicwriter v0.1.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.25.1 // indirect

@@ -43,6 +43,7 @@ import (
 	"github.com/kong/kubernetes-ingress-controller/v3/internal/dataplane/sendconfig"
 	"github.com/kong/kubernetes-ingress-controller/v3/internal/dataplane/translator"
 	"github.com/kong/kubernetes-ingress-controller/v3/internal/diagnostics"
+	"github.com/kong/kubernetes-ingress-controller/v3/internal/license"
 	"github.com/kong/kubernetes-ingress-controller/v3/internal/store"
 	"github.com/kong/kubernetes-ingress-controller/v3/internal/versions"
 	"github.com/kong/kubernetes-ingress-controller/v3/test/helpers"
@@ -845,6 +846,10 @@ func (cf *mockKongLastValidConfigFetcher) TryFetchingValidConfigFromGateways(con
 		cf.lastKongState = configfetcher.KongRawStateToKongState(cf.kongRawState)
 	}
 	return nil
+}
+
+func (cf *mockKongLastValidConfigFetcher) InjectLicenseGetter(licenseGetter license.Getter) {
+	// no-op
 }
 
 func TestKongClientUpdate_FetchStoreAndPushLastValidConfig(t *testing.T) {

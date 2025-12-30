@@ -26,6 +26,8 @@ type LastValidConfigFetcher interface {
 
 	// StoreLastValidConfig stores a given configuration as the last valid config. Should be used when the configuration was successfully accepted by a gateway.
 	StoreLastValidConfig(s *kongstate.KongState)
+
+	InjectLicenseGetter(licenseGetter license.Getter)
 }
 
 type DefaultKongLastGoodConfigFetcher struct {
